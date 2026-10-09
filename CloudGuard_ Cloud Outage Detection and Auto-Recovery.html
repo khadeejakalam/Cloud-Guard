@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CloudGuard: Cloud Outage Detection and Auto-Recovery</title>
+<meta name="description" content="CloudGuard is a college prototype that detects cloud outages in an e-commerce platform, scales under load, and fails over to a healthy region.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F3F5F8;
+    --bg-alt: #E8ECF2;
+    --surface: #FFFFFF;
+    --ink: #0E1B2E;
+    --muted: #4F5C73;
+    --line: #D6DCE6;
+    --accent: #2F5BFF;
+    --on-accent: #FFFFFF;
+    --ok: #12805C;
+    --warn: #9A6700;
+    --bad: #C23B3B;
+
+    --band: #0E1B2E;
+    --band-ink: #F3F5F8;
+    --band-muted: #A9B4CA;
+    --band-line: rgba(255,255,255,.14);
+    --band-panel: rgba(255,255,255,.05);
+    --ok-b: #4ADE9A;
+    --warn-b: #F5B942;
+    --bad-b: #FF7A7A;
+    --accent-b: #7C99FF;
+
+    --font-display: "Sora", "Segoe UI", Arial, sans-serif;
+    --font-body: "IBM Plex Sans", "Segoe UI", Arial, sans-serif;
+
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0F1623;
+      --bg-alt: #151E2F;
+      --surface: #1A2539;
+      --ink: #E8ECF4;
+      --muted: #A3AEC4;
+      --line: #2A364D;
+      --accent: #7C99FF;
+      --on-accent: #0B1220;
+      --ok: #4ADE9A;
+      --warn: #F5B942;
+      --bad: #FF7A7A;
+      --band: #0A101C;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1623;
+    --bg-alt: #151E2F;
+    --surface: #1A2539;
+    --ink: #E8ECF4;
+    --muted: #A3AEC4;
+    --line: #2A364D;
+    --accent: #7C99FF;
+    --on-accent: #0B1220;
+    --ok: #4ADE9A;
+    --warn: #F5B942;
+    --bad: #FF7A7A;
+    --band: #0A101C;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + 80px); scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 1.0625rem; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  h1, h2, h3 { font-family: var(--font-display); margin: 0; line-height: 1.15; letter-spacing: -0.025em; }
+  h1 { font-size: clamp(2.35rem, 6.2vw, 4rem); font-weight: 700; }
+  h2 { font-size: clamp(1.8rem, 4.2vw, 2.55rem); font-weight: 700; }
+  h3 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.015em; }
+  p { margin: 0; }
+  ul, ol { margin: 0; padding: 0; list-style: none; }
+
+  .wrap { width: min(1120px, 100% - 40px); margin-inline: auto; }
+  .section { padding: clamp(56px, 9vw, 104px) 0; }
+  .section-head { max-width: 62ch; margin-bottom: clamp(28px, 5vw, 48px); }
+  .section-head p { color: var(--muted); margin-top: 14px; }
+  .alt { background: var(--bg-alt); }
+
+  .skip-link { position: absolute; left: -999px; top: 8px; background: var(--accent); color: var(--on-accent); padding: 10px 16px; border-radius: 8px; z-index: 100; }
+  .skip-link:focus { left: 12px; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 12px 24px; border-radius: 10px; font: 600 1rem var(--font-body); text-decoration: none; cursor: pointer; border: 2px solid transparent; transition: background-color .2s, color .2s, transform .2s; }
+  .btn-primary { background: var(--accent); color: var(--on-accent); }
+  .btn-primary:hover { transform: translateY(-2px); filter: brightness(1.08); }
+  .btn-secondary { border-color: var(--ink); color: var(--ink); background: transparent; }
+  .btn-secondary:hover { background: var(--ink); color: var(--bg); }
+
+  /* Header */
+  .site-header { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 50; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .nav-bar { display: flex; align-items: center; justify-content: space-between; min-height: 68px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 700 1.2rem var(--font-display); letter-spacing: -0.02em; }
+  .brand svg { width: 28px; height: 28px; flex: none; }
+  .nav-links { display: flex; gap: 2px; }
+  .nav-links a { display: block; padding: 10px 12px; border-radius: 8px; text-decoration: none; font-weight: 500; font-size: .98rem; color: var(--muted); transition: color .2s, background-color .2s; }
+  .nav-links a:hover { color: var(--ink); background: var(--surface); }
+  .menu-btn { display: none; min-height: 44px; min-width: 44px; padding: 0 14px; border: 2px solid var(--ink); border-radius: 10px; background: transparent; color: var(--ink); font: 600 .95rem var(--font-body); cursor: pointer; }
+  @media (max-width: 860px) {
+    .menu-btn { display: inline-flex; align-items: center; justify-content: center; }
+    .nav-links { display: none; position: absolute; left: 0; right: 0; top: 100%; flex-direction: column; gap: 0; padding: 8px 20px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+    .nav-links.open { display: flex; }
+    .nav-links a { padding: 14px 8px; font-size: 1.05rem; }
+  }
+
+  /* Hero */
+  .hero { padding: clamp(48px, 8vw, 96px) 0 clamp(56px, 8vw, 96px); }
+  .hero-grid { display: grid; gap: 44px; align-items: center; }
+  @media (min-width: 900px) { .hero-grid { grid-template-columns: 1.2fr .8fr; gap: 64px; } }
+  .hero-copy p { color: var(--muted); font-size: 1.2rem; margin-top: 22px; max-width: 48ch; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 32px; }
+
+  .statuscard { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
+  .statuscard h2 { font-size: 1.35rem; }
+  .sc-sub { color: var(--muted); font-size: .95rem; margin-top: 2px; }
+  .sc-list { margin-top: 14px; }
+  .sc-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 48px; border-top: 1px solid var(--line); font-weight: 500; }
+  .sc-note { margin-top: 14px; padding-top: 14px; border-top: 2px solid var(--ink); color: var(--muted); font-size: .98rem; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 99px; font-size: .9rem; font-weight: 600; border: 1.5px solid currentColor; }
+  .pill.ok { color: var(--ok); }
+  .pill.bad { color: var(--bad); }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+  .hero-copy h1 { animation: rise .7s ease both; }
+  .hero-copy p { animation: rise .7s .12s ease both; }
+  .hero-actions { animation: rise .7s .22s ease both; }
+  .statuscard { animation: rise .7s .32s ease both; }
+
+  /* Simulator (dark band) */
+  .band { background: var(--band); color: var(--band-ink); }
+  .band .section-head p { color: var(--band-muted); }
+  .scenarios { display: grid; gap: 12px; margin-bottom: 20px; }
+  @media (min-width: 760px) { .scenarios { grid-template-columns: repeat(3, 1fr); } }
+  .scenario { text-align: left; padding: 16px 18px; min-height: 76px; border-radius: 12px; border: 1.5px solid var(--band-line); background: var(--band-panel); color: var(--band-ink); font: 400 .98rem var(--font-body); cursor: pointer; transition: border-color .2s, background-color .2s; }
+  .scenario strong { display: block; font: 600 1.05rem var(--font-display); letter-spacing: -0.01em; margin-bottom: 2px; }
+  .scenario span { color: var(--band-muted); }
+  .scenario:hover { border-color: var(--accent-b); }
+  .scenario[aria-pressed="true"] { border-color: var(--accent-b); background: rgba(124,153,255,.16); }
+
+  .pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 16px; }
+  .stage { padding: 10px 6px; text-align: center; border-radius: 8px; border: 1.5px solid var(--band-line); color: var(--band-muted); font-weight: 600; font-size: .95rem; transition: background-color .3s, color .3s, border-color .3s; }
+  .stage small { display: block; font-weight: 400; font-size: .75rem; min-height: 1.1em; }
+  .stage.done { color: var(--band-ink); border-color: rgba(255,255,255,.35); }
+  .stage.current { background: var(--accent-b); border-color: var(--accent-b); color: #0B1220; }
+  .stage.skipped { opacity: .55; }
+  @media (max-width: 560px) { .stage { font-size: .8rem; padding: 8px 2px; } .stage small { display: none; } }
+
+  .headline { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-radius: 12px; background: var(--band-panel); border: 1px solid var(--band-line); margin-bottom: 20px; font-weight: 600; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--ok-b); }
+  .headline.warn .dot { background: var(--warn-b); }
+  .headline.bad .dot { background: var(--bad-b); }
+
+  .sim-grid { display: grid; gap: 20px; }
+  @media (min-width: 900px) { .sim-grid { grid-template-columns: 1fr 1fr; } }
+  .panel { background: var(--band-panel); border: 1px solid var(--band-line); border-radius: 16px; padding: 22px; }
+  .panel h3 { font-size: 1.1rem; margin-bottom: 14px; }
+
+  .metric { padding: 10px 0; border-top: 1px solid var(--band-line); }
+  .metric:first-of-type { border-top: 0; padding-top: 0; }
+  .metric-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .metric-label { color: var(--band-muted); font-size: .95rem; }
+  .metric-value { font: 600 1.05rem var(--font-body); font-variant-numeric: tabular-nums; }
+  .metric-level { font-size: .8rem; font-weight: 600; margin-left: 8px; color: var(--ok-b); }
+  .metric.warn .metric-level { color: var(--warn-b); }
+  .metric.bad .metric-level { color: var(--bad-b); }
+  .track { height: 8px; border-radius: 99px; background: rgba(255,255,255,.12); margin-top: 8px; overflow: hidden; }
+  .fill { height: 100%; width: 0; border-radius: 99px; background: var(--ok-b); transition: width .35s ease, background-color .3s; }
+  .metric.warn .fill { background: var(--warn-b); }
+  .metric.bad .fill { background: var(--bad-b); }
+  .users-row { display: flex; justify-content: space-between; padding-top: 12px; border-top: 1px solid var(--band-line); }
+
+  .regions { display: grid; gap: 14px; }
+  @media (min-width: 560px) { .regions { grid-template-columns: 1fr 1fr; } }
+  .region { border: 1.5px solid var(--band-line); border-radius: 12px; padding: 16px; }
+  .region-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .region-head h4 { margin: 0; font: 600 1.05rem var(--font-display); }
+  .role { color: var(--band-muted); font-size: .9rem; }
+  .badge { font-size: .82rem; font-weight: 700; padding: 3px 10px; border-radius: 99px; border: 1.5px solid currentColor; color: var(--ok-b); white-space: nowrap; }
+  .badge.degraded { color: var(--warn-b); }
+  .badge.down { color: var(--bad-b); }
+  .servers { display: flex; flex-wrap: wrap; gap: 5px; margin: 14px 0 6px; }
+  .srv { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid rgba(255,255,255,.22); }
+  .srv.on { background: var(--accent-b); border-color: var(--accent-b); }
+  .srv.fail { border-color: var(--bad-b); background: repeating-linear-gradient(45deg, transparent 0 3px, rgba(255,122,122,.5) 3px 5px); }
+  .small { font-size: .9rem; color: var(--band-muted); }
+  .share-track { height: 8px; border-radius: 99px; background: rgba(255,255,255,.12); margin-top: 8px; overflow: hidden; }
+  .share-fill { height: 100%; width: 0; background: var(--accent-b); border-radius: 99px; transition: width .35s ease; }
+  .db-note { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--band-line); }
+
+  .checks li { display: flex; justify-content: space-between; align-items: center; min-height: 44px; border-top: 1px solid var(--band-line); }
+  .checks li:first-child { border-top: 0; }
+  .band .pill.ok { color: var(--ok-b); }
+  .band .pill.bad { color: var(--bad-b); }
+  .log { max-height: 300px; overflow-y: auto; }
+  .log li { display: flex; gap: 12px; padding: 9px 0; border-top: 1px solid var(--band-line); font-size: .97rem; }
+  .log li:first-child { border-top: 0; }
+  .log time { color: var(--band-muted); font-variant-numeric: tabular-nums; flex: none; }
+  .log li.warn span { color: var(--warn-b); }
+  .log li.bad span { color: var(--bad-b); }
+  .log li.ok span { color: var(--ok-b); }
+  .sim-note { margin-top: 18px; color: var(--band-muted); font-size: .92rem; max-width: 70ch; }
+
+  /* Problem */
+  .chain { display: grid; gap: 10px; margin-bottom: clamp(36px, 6vw, 56px); }
+  @media (min-width: 900px) { .chain { grid-template-columns: repeat(6, 1fr); gap: 18px; } }
+  .chain li { position: relative; padding: 14px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; font-weight: 600; font-size: .98rem; line-height: 1.35; }
+  .chain li:last-child { border-color: var(--bad); color: var(--bad); }
+  @media (min-width: 900px) { .chain li:not(:last-child)::after { content: "\2192"; position: absolute; right: -16px; top: 50%; transform: translateY(-50%); color: var(--muted); font-weight: 400; } }
+  .two-col { display: grid; gap: 40px 64px; }
+  @media (min-width: 900px) { .two-col { grid-template-columns: 1.25fr 1fr; } }
+  .ruled { border-top: 2px solid var(--ink); }
+  .ruled li { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .ruled strong { display: block; font-weight: 600; }
+  .ruled span { color: var(--muted); }
+  .impact li { padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .col-title { margin-bottom: 14px; }
+  .msgs { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+  .msg { padding: 8px 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); font-size: .95rem; }
+  .callout { margin-top: 40px; background: var(--surface); border-left: 5px solid var(--accent); border-radius: 0 12px 12px 0; padding: 22px 26px; }
+  .callout p { margin-top: 8px; max-width: 66ch; color: var(--muted); }
+
+  /* How it works */
+  .steps { max-width: 820px; }
+  .steps > li { display: grid; grid-template-columns: 56px 1fr; gap: 16px; padding: 26px 0; border-top: 1px solid var(--line); }
+  .steps > li:first-child { border-top: 2px solid var(--ink); }
+  .step-no { font: 700 2.2rem var(--font-display); color: var(--accent); line-height: 1; letter-spacing: -0.04em; }
+  .steps p { color: var(--muted); margin-top: 8px; max-width: 60ch; }
+  .metric-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .tag { padding: 5px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); font-size: .9rem; }
+  .scale-demo { display: flex; flex-wrap: wrap; gap: 22px; margin-top: 14px; }
+  .scale-demo div { font-size: .92rem; color: var(--muted); }
+  .scale-demo .sq-row { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; max-width: 130px; }
+  .scale-demo i { width: 14px; height: 14px; border-radius: 3px; background: var(--accent); display: block; }
+
+  /* Architecture */
+  .arch { max-width: 760px; margin-inline: auto; display: grid; justify-items: center; }
+  .node { width: 100%; padding: 14px 18px; border-radius: 12px; background: var(--surface); border: 1.5px solid var(--ink); text-align: center; font-weight: 600; }
+  .node small { display: block; font-weight: 400; color: var(--muted); font-size: .9rem; }
+  .node.narrow { max-width: 280px; }
+  .link { width: 2px; height: 26px; background: var(--ink); }
+  .arch-row { width: 100%; display: grid; gap: 16px; }
+  @media (min-width: 640px) { .arch-row { grid-template-columns: 1fr 1fr; } }
+  .region-box { border: 1.5px dashed var(--muted); border-radius: 14px; padding: 14px; display: grid; gap: 12px; }
+  .region-box > h3 { text-align: center; font-size: 1rem; }
+  .node.accent { border-color: var(--accent); background: transparent; border-width: 2px; }
+
+  /* Tech */
+  .stack-list { border-top: 2px solid var(--ink); max-width: 860px; }
+  .stack-list li { display: grid; gap: 4px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+  @media (min-width: 700px) { .stack-list li { grid-template-columns: 200px 1fr; gap: 24px; } }
+  .stack-list strong { font-weight: 600; }
+  .stack-list span { color: var(--muted); }
+  .levels { display: grid; gap: 16px; margin-top: 48px; }
+  @media (min-width: 800px) { .levels { grid-template-columns: repeat(3, 1fr); } }
+  .level { padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .level p { margin-top: 8px; color: var(--muted); }
+  .level-tag { display: inline-block; font-weight: 600; font-size: .9rem; color: var(--accent); margin-bottom: 6px; }
+
+  /* Innovation */
+  .compare { display: grid; gap: 20px; }
+  @media (min-width: 860px) { .compare { grid-template-columns: 1fr 1fr; } }
+  .flow { padding: 24px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); }
+  .flow.new { border: 2px solid var(--accent); }
+  .flow ol li { padding: 10px 0 10px 28px; position: relative; border-top: 1px solid var(--line); }
+  .flow ol li:first-child { border-top: 0; }
+  .flow ol li::before { content: ""; position: absolute; left: 4px; top: 21px; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .flow.new ol li::before { background: var(--accent); }
+  .flow h3 { margin-bottom: 8px; }
+  .ml-note { margin-top: 28px; max-width: 66ch; color: var(--muted); }
+
+  /* Outcome */
+  .outcomes { display: grid; gap: 0 56px; }
+  @media (min-width: 760px) { .outcomes { grid-template-columns: 1fr 1fr; } }
+  .outcomes li { display: flex; gap: 14px; padding: 16px 0; border-top: 1px solid var(--line); }
+  .outcomes .tick { color: var(--ok); font-weight: 700; flex: none; }
+  .title-card { margin-top: 48px; padding: 26px; border-radius: 14px; background: var(--ink); color: var(--bg); }
+  .title-card p { font: 600 clamp(1.1rem, 2.6vw, 1.45rem) var(--font-display); letter-spacing: -0.015em; line-height: 1.3; }
+
+  /* Footer */
+  .site-footer { background: var(--band); color: var(--band-ink); padding: 56px 0 40px; }
+  .footer-grid { display: grid; gap: 32px; }
+  @media (min-width: 760px) { .footer-grid { grid-template-columns: 1.5fr 1fr; } }
+  .site-footer h3 { font-size: 1rem; margin-bottom: 12px; }
+  .site-footer p, .site-footer li { color: var(--band-muted); font-size: .98rem; }
+  .site-footer ul { display: grid; gap: 6px; grid-template-columns: 1fr 1fr; }
+  .site-footer a { text-decoration: none; }
+  .site-footer a:hover { color: var(--accent-b); }
+  .fine-print { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--band-line); font-size: .88rem; color: var(--band-muted); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap nav-bar">
+    <a class="brand" href="#top" aria-label="CloudGuard home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3l11 4v8c0 7-4.6 12.2-11 14C9.6 27.2 5 22 5 15V7z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M11 16l3.5 3.5L21 12.5" fill="none" stroke="#2F5BFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      CloudGuard
+    </a>
+    <button class="menu-btn" id="menu-btn" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    <ul class="nav-links" id="nav-links">
+      <li><a href="#simulator">Simulator</a></li>
+      <li><a href="#problem">The problem</a></li>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#stack">Tech stack</a></li>
+      <li><a href="#outcome">Outcome</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="main">
+  <!-- HERO -->
+  <section class="hero" id="top">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <h1>When a cloud region fails, CloudGuard moves the traffic.</h1>
+        <p>A prototype that detects outages in an e-commerce platform, scales it under heavy load, sends customers to a healthy region, and tells the administrator what happened.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#simulator">Run the live simulation</a>
+          <a class="btn btn-secondary" href="#problem">Read the case study</a>
+        </div>
+      </div>
+      <aside class="statuscard" aria-labelledby="sc-title">
+        <h2 id="sc-title">ShopSphere, mid-sale</h2>
+        <p class="sc-sub">A health check during the outage</p>
+        <ul class="sc-list">
+          <li>Website <span class="pill ok"><span aria-hidden="true">&#10003;</span> Up</span></li>
+          <li>Login <span class="pill ok"><span aria-hidden="true">&#10003;</span> Up</span></li>
+          <li>Product search <span class="pill ok"><span aria-hidden="true">&#10003;</span> Up</span></li>
+          <li>Shopping cart <span class="pill ok"><span aria-hidden="true">&#10003;</span> Up</span></li>
+          <li>Checkout <span class="pill bad"><span aria-hidden="true">&#10005;</span> Down</span></li>
+          <li>Payment <span class="pill bad"><span aria-hidden="true">&#10005;</span> Down</span></li>
+        </ul>
+        <p class="sc-note">The homepage loads, but customers cannot pay. A simple &ldquo;is the website online?&rdquo; check would call this a success.</p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- SIMULATOR -->
+  <section class="section band" id="simulator">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Run the outage yourself</h2>
+        <p>Pick a scenario and watch CloudGuard detect the problem, decide what to do, and recover. This is a browser simulation with made-up numbers, not a real cloud.</p>
+      </div>
+
+      <div class="scenarios" role="group" aria-label="Choose a scenario">
+        <button class="scenario" type="button" data-scenario="normal" aria-pressed="true"><strong>Normal operation</strong><span>Low load, everything healthy</span></button>
+        <button class="scenario" type="button" data-scenario="spike" aria-pressed="false"><strong>Traffic spike</strong><span>Thousands of customers hit Region A</span></button>
+        <button class="scenario" type="button" data-scenario="failure" aria-pressed="false"><strong>Region A failure</strong><span>Region A goes down completely</span></button>
+      </div>
+
+      <ol class="pipeline" id="pipeline" aria-label="CloudGuard response stages"></ol>
+      <div class="headline" id="headline"><span class="dot" aria-hidden="true"></span><span id="headline-text">Normal operation. CloudGuard is monitoring.</span></div>
+
+      <div class="sim-grid">
+        <div class="panel">
+          <h3>Platform metrics</h3>
+          <div id="metrics"></div>
+          <div class="users-row"><span class="metric-label">Active users</span><span class="metric-value" id="users">0</span></div>
+        </div>
+
+        <div class="panel">
+          <h3>Regions and traffic</h3>
+          <div class="regions" id="regions"></div>
+          <p class="db-note small" id="db-note"></p>
+        </div>
+
+        <div class="panel">
+          <h3>Service health checks</h3>
+          <ul class="checks" id="checks"></ul>
+        </div>
+
+        <div class="panel">
+          <h3>What CloudGuard is doing</h3>
+          <ol class="log" id="log" aria-live="polite" aria-label="Action log"></ol>
+        </div>
+      </div>
+      <p class="sim-note">Numbers in the simulation follow the case study: normal CPU near 40%, a spike pushing CPU to about 95%, and a 3-server to 6-server scale-out. In a real build, these values would come from live monitoring tools.</p>
+    </div>
+  </section>
+
+  <!-- PROBLEM -->
+  <section class="section" id="problem">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>What went wrong at ShopSphere</h2>
+        <p>ShopSphere is an e-commerce company serving millions of customers, with its whole platform on cloud infrastructure. During a major sale, most critical services depended on a single cloud region.</p>
+      </div>
+
+      <ol class="chain" aria-label="Sequence of the incident">
+        <li>High traffic</li>
+        <li>Server and resource overload</li>
+        <li>Application failures</li>
+        <li>Database and API problems</li>
+        <li>Orders fail</li>
+        <li>Website partly unavailable</li>
+      </ol>
+
+      <div class="two-col">
+        <div>
+          <h3 class="col-title">Root causes</h3>
+          <ul class="ruled">
+            <li><strong>Single-region dependency</strong><span>Most critical services run in one cloud region.</span></li>
+            <li><strong>Traffic spike</strong><span>A sudden jump in users overwhelms resources.</span></li>
+            <li><strong>Insufficient auto-scaling</strong><span>Resources cannot grow quickly enough.</span></li>
+            <li><strong>Service dependency</strong><span>One failing service drags others down with it.</span></li>
+            <li><strong>Database bottleneck</strong><span>Too many requests arrive at the database at once.</span></li>
+            <li><strong>Poor failure detection</strong><span>Problems are not noticed quickly.</span></li>
+            <li><strong>Weak disaster recovery</strong><span>Backup systems cannot take over immediately.</span></li>
+            <li><strong>No effective failover</strong><span>Traffic cannot move to healthy infrastructure on its own.</span></li>
+          </ul>
+        </div>
+        <div>
+          <h3 class="col-title">Business impact</h3>
+          <ul class="impact ruled">
+            <li>Lost orders</li>
+            <li>Failed payments</li>
+            <li>Revenue loss</li>
+            <li>Customer dissatisfaction</li>
+            <li>Inventory inconsistencies</li>
+            <li>More customer-support work</li>
+            <li>Damage to the company&rsquo;s reputation</li>
+            <li>Possible data inconsistency</li>
+          </ul>
+          <div class="msgs" aria-label="Messages customers see">
+            <span class="msg">&ldquo;Unable to place order&rdquo;</span>
+            <span class="msg">&ldquo;Payment failed&rdquo;</span>
+            <span class="msg">&ldquo;Service temporarily unavailable&rdquo;</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h3>Partial failure is the hardest to catch</h3>
+        <p>The website may still open while checkout is broken. Checking only whether the site is &ldquo;online&rdquo; is not enough, so CloudGuard tests each service the customer actually needs.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="section alt" id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>How CloudGuard works</h2>
+        <p>The core idea is five actions in a row: detect, decide, redirect, recover, report. Behind them are five building blocks.</p>
+      </div>
+      <ol class="steps">
+        <li>
+          <span class="step-no" aria-hidden="true">1</span>
+          <div>
+            <h3>Monitor continuously</h3>
+            <p>CloudGuard watches the health of the whole platform. When CPU hits 92%, error rate hits 17% and response time hits 4.8 seconds, it knows the environment is getting unhealthy.</p>
+            <div class="metric-tags">
+              <span class="tag">CPU</span><span class="tag">Memory</span><span class="tag">Network traffic</span><span class="tag">Response time</span><span class="tag">Error rate</span><span class="tag">Database load</span><span class="tag">Active users</span><span class="tag">Failed transactions</span><span class="tag">Service availability</span>
+            </div>
+          </div>
+        </li>
+        <li>
+          <span class="step-no" aria-hidden="true">2</span>
+          <div>
+            <h3>Check each service</h3>
+            <p>Instead of asking only whether a server is running, CloudGuard runs application-level health checks on login, search, cart, checkout and payment. This is how it catches partial outages.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-no" aria-hidden="true">3</span>
+          <div>
+            <h3>Scale automatically</h3>
+            <p>When traffic grows, CloudGuard starts more application instances. When traffic falls, it removes the extra ones to save cost.</p>
+            <div class="scale-demo">
+              <div><div class="sq-row"><i></i><i></i><i></i></div>Normal: 3 servers</div>
+              <div><div class="sq-row"><i></i><i></i><i></i><i></i><i></i><i></i></div>High: 6 servers</div>
+              <div><div class="sq-row"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>Extreme: 10 servers</div>
+            </div>
+          </div>
+        </li>
+        <li>
+          <span class="step-no" aria-hidden="true">4</span>
+          <div>
+            <h3>Fail over automatically</h3>
+            <p>If Region A becomes unhealthy, CloudGuard sends new requests to Region B. The platform no longer depends on a single location.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-no" aria-hidden="true">5</span>
+          <div>
+            <h3>Keep the data replicated</h3>
+            <p>The database is copied between the primary and backup environments. If the primary becomes unavailable, the backup can be promoted. A real system would need careful design for consistency and transactions, especially for payments and inventory.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section class="section" id="architecture">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Prototype architecture</h2>
+        <p>Users reach a load balancer, which sends traffic to the primary region. A backup region is ready to take over, and CloudGuard watches everything.</p>
+      </div>
+      <div class="arch">
+        <div class="node narrow">Users</div>
+        <div class="link" aria-hidden="true"></div>
+        <div class="node narrow">Load balancer</div>
+        <div class="link" aria-hidden="true"></div>
+        <div class="arch-row">
+          <div class="region-box"><h3>Cloud Region A <small>(primary)</small></h3><div class="node">App servers</div></div>
+          <div class="region-box"><h3>Cloud Region B <small>(backup)</small></h3><div class="node">App servers</div></div>
+        </div>
+        <div class="link" aria-hidden="true"></div>
+        <div class="node narrow">Database replication<small>primary and backup copies stay in sync</small></div>
+        <div class="link" aria-hidden="true"></div>
+        <div class="node narrow accent">CloudGuard monitoring</div>
+        <div class="link" aria-hidden="true"></div>
+        <div class="arch-row">
+          <div class="node">Alert system<small>tells the administrator</small></div>
+          <div class="node">Auto recovery<small>scales and fails over</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TECH STACK -->
+  <section class="section alt" id="stack">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Technology for a student prototype</h2>
+        <p>You do not need a huge production cloud. A simulation is enough to demonstrate the idea, and you can grow it in three levels.</p>
+      </div>
+      <ul class="stack-list">
+        <li><strong>Frontend</strong><span>HTML, CSS, JavaScript. React for a more advanced interface.</span></li>
+        <li><strong>Backend</strong><span>Python with Flask or FastAPI, or Node.js.</span></li>
+        <li><strong>Monitoring</strong><span>Prometheus and Grafana.</span></li>
+        <li><strong>Cloud simulation</strong><span>AWS, Microsoft Azure or Google Cloud. For a simpler project, simulate two regions with two local or server instances.</span></li>
+        <li><strong>Database</strong><span>MySQL, PostgreSQL or MongoDB.</span></li>
+        <li><strong>Containers</strong><span>Docker.</span></li>
+        <li><strong>Optional advanced</strong><span>Kubernetes for automatic scaling and service recovery.</span></li>
+      </ul>
+      <div class="levels">
+        <div class="level"><span class="level-tag">Level 1</span><h3>Simulated prototype</h3><p>A dashboard and two simulated regions. Enough for a clear college demo.</p></div>
+        <div class="level"><span class="level-tag">Level 2</span><h3>Docker-based version</h3><p>Each region and service runs in its own container for a stronger project.</p></div>
+        <div class="level"><span class="level-tag">Level 3</span><h3>Real multi-service deployment</h3><p>Services deployed across real cloud infrastructure.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INNOVATION -->
+  <section class="section" id="innovation">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>The idea: act without waiting for a human</h2>
+        <p>The strongest part of CloudGuard is the combination of monitoring, prediction and automatic recovery.</p>
+      </div>
+      <div class="compare">
+        <div class="flow">
+          <h3>Without CloudGuard</h3>
+          <ol>
+            <li>Problem happens</li>
+            <li>A human notices</li>
+            <li>A human fixes it</li>
+          </ol>
+        </div>
+        <div class="flow new">
+          <h3>With CloudGuard</h3>
+          <ol>
+            <li>Problem is detected</li>
+            <li>System analyzes it</li>
+            <li>System responds</li>
+            <li>Service recovers</li>
+            <li>Administrator receives an alert</li>
+          </ol>
+        </div>
+      </div>
+      <p class="ml-note">You could also add a simple machine-learning model that predicts an upcoming outage from CPU, memory, traffic, latency and error rate.</p>
+    </div>
+  </section>
+
+  <!-- OUTCOME -->
+  <section class="section alt" id="outcome">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>What the prototype proves</h2>
+        <p>A cloud-based e-commerce application protected by CloudGuard can:</p>
+      </div>
+      <ul class="outcomes">
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Detect abnormal conditions</li>
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Identify which service is failing</li>
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Scale resources during traffic spikes</li>
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Redirect users to a healthy region</li>
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Keep data replicated</li>
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Alert administrators</li>
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Record each incident for later analysis</li>
+        <li><span class="tick" aria-hidden="true">&#10003;</span>Reduce downtime and improve availability</li>
+      </ul>
+      <div class="title-card">
+        <p>CloudGuard: A Fault-Tolerant Cloud Architecture for Automatic Detection and Recovery from E-Commerce Service Outages</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <h3>CloudGuard</h3>
+        <p>Intelligent cloud outage detection and auto-recovery. A college project prototype.</p>
+      </div>
+      <div>
+        <h3>Jump to</h3>
+        <ul>
+          <li><a href="#simulator">Simulator</a></li>
+          <li><a href="#problem">The problem</a></li>
+          <li><a href="#how">How it works</a></li>
+          <li><a href="#architecture">Architecture</a></li>
+          <li><a href="#stack">Tech stack</a></li>
+          <li><a href="#outcome">Outcome</a></li>
+        </ul>
+      </div>
+    </div>
+    <p class="fine-print">&copy; <span id="year"></span> CloudGuard project. ShopSphere is a fictional company, and the simulator uses made-up numbers for demonstration only.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  /* ---------- Menu and footer year ---------- */
+  var menuBtn = document.getElementById('menu-btn');
+  var navLinks = document.getElementById('nav-links');
+  menuBtn.addEventListener('click', function () {
+    var open = navLinks.classList.toggle('open');
+    menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  navLinks.addEventListener('click', function (e) {
+    if (e.target.tagName === 'A') { navLinks.classList.remove('open'); menuBtn.setAttribute('aria-expanded', 'false'); }
+  });
+  document.getElementById('year').textContent = new Date().getFullYear();
+
+  /* ---------- Simulator setup ---------- */
+  var METRICS = [
+    { k: 'cpu',  label: 'CPU usage',     max: 100,  warn: 65,  bad: 85,   fmt: function (v) { return Math.round(v) + '%'; } },
+    { k: 'mem',  label: 'Memory',        max: 100,  warn: 65,  bad: 85,   fmt: function (v) { return Math.round(v) + '%'; } },
+    { k: 'net',  label: 'Network',       max: 100,  warn: 65,  bad: 90,   fmt: function (v) { return Math.round(v) + '%'; } },
+    { k: 'db',   label: 'Database load', max: 100,  warn: 65,  bad: 85,   fmt: function (v) { return Math.round(v) + '%'; } },
+    { k: 'err',  label: 'Error rate',    max: 25,   warn: 2,   bad: 8,    fmt: function (v) { return v.toFixed(1) + '%'; } },
+    { k: 'resp', label: 'Response time', max: 5000, warn: 800, bad: 2000, fmt: function (v) { return v >= 1000 ? (v / 1000).toFixed(1) + ' s' : Math.round(v) + ' ms'; } }
+  ];
+  var CHECKS = [
+    ['website', 'Website'], ['login', 'Login'], ['search', 'Product search'],
+    ['cart', 'Shopping cart'], ['checkout', 'Checkout'], ['payment', 'Payment']
+  ];
+  var STAGES = ['Detect', 'Decide', 'Redirect', 'Recover', 'Report'];
+  var BASE = { cpu: 40, mem: 48, net: 35, db: 38, err: 0.2, resp: 150, users: 1200 };
+
+  var cur = {}, target = {}, k;
+  for (k in BASE) { cur[k] = BASE[k]; target[k] = BASE[k]; }
+  var share = { a: 100, b: 0 }, shareTarget = { a: 100, b: 0 };
+  var state = {
+    a: { status: 'healthy', running: 3, total: 3 },
+    b: { status: 'healthy', running: 3, total: 3 },
+    checks: {}, stage: -1, skip: [], db: 'Replication is in sync. Region A holds the primary database.',
+    tone: 'ok', headline: 'Normal operation. CloudGuard is monitoring.'
+  };
+  CHECKS.forEach(function (c) { state.checks[c[0]] = true; });
+
+  /* Build metric rows once */
+  var metricsEl = document.getElementById('metrics');
+  var rows = {};
+  METRICS.forEach(function (m) {
+    var div = document.createElement('div');
+    div.className = 'metric';
+    div.innerHTML = '<div class="metric-top"><span class="metric-label"></span><span><span class="metric-value"></span><span class="metric-level"></span></span></div><div class="track" aria-hidden="true"><div class="fill"></div></div>';
+    div.querySelector('.metric-label').textContent = m.label;
+    metricsEl.appendChild(div);
+    rows[m.k] = { el: div, val: div.querySelector('.metric-value'), lvl: div.querySelector('.metric-level'), fill: div.querySelector('.fill') };
+  });
+  var usersEl = document.getElementById('users');
+
+  function renderMetrics() {
+    METRICS.forEach(function (m) {
+      var v = cur[m.k], r = rows[m.k], level = 'ok', text = 'Normal';
+      if (v >= m.bad) { level = 'bad'; text = 'Critical'; }
+      else if (v >= m.warn) { level = 'warn'; text = 'Elevated'; }
+      r.el.className = 'metric ' + (level === 'ok' ? '' : level);
+      r.val.textContent = m.fmt(v);
+      r.lvl.textContent = text;
+      r.fill.style.width = Math.min(100, Math.max(2, v / m.max * 100)) + '%';
+    });
+    usersEl.textContent = Math.round(cur.users).toLocaleString('en-US');
+  }
+
+  /* Regions */
+  var regionsEl = document.getElementById('regions');
+  var dbEl = document.getElementById('db-note');
+  var STATUS_TEXT = { healthy: 'Healthy', degraded: 'Degraded', down: 'Down' };
+  function serverSquares(r) {
+    var html = '', i, n = Math.max(r.total, 3);
+    for (i = 0; i < Math.min(n, 10); i++) {
+      var cls = 'srv';
+      if (r.status === 'down') cls += ' fail'; else if (i < r.running) cls += ' on';
+      html += '<span class="' + cls + '"></span>';
+    }
+    return html;
+  }
+  function regionHtml(id, name, role) {
+    var r = state[id];
+    var s = Math.round(share[id]);
+    return '<div class="region">' +
+      '<div class="region-head"><div><h4>' + name + '</h4><span class="role">' + role + '</span></div><span class="badge ' + r.status + '">' + STATUS_TEXT[r.status] + '</span></div>' +
+      '<div class="servers" aria-hidden="true">' + serverSquares(r) + '</div>' +
+      '<p class="small">' + r.running + ' of ' + r.total + ' servers running</p>' +
+      '<p class="small" style="margin-top:10px">Receiving ' + s + '% of traffic</p>' +
+      '<div class="share-track" aria-hidden="true"><div class="share-fill" style="width:' + s + '%"></div></div>' +
+      '</div>';
+  }
+  function renderRegions() {
+    regionsEl.innerHTML = regionHtml('a', 'Region A', 'Primary') + regionHtml('b', 'Region B', 'Backup');
+    dbEl.textContent = state.db;
+  }
+
+  /* Checks */
+  var checksEl = document.getElementById('checks');
+  function renderChecks() {
+    checksEl.innerHTML = '';
+    CHECKS.forEach(function (c) {
+      var up = state.checks[c[0]];
+      var li = document.createElement('li');
+      li.innerHTML = '<span></span><span class="pill ' + (up ? 'ok' : 'bad') + '"><span aria-hidden="true">' + (up ? '\u2713' : '\u2715') + '</span> ' + (up ? 'Up' : 'Down') + '</span>';
+      li.firstChild.textContent = c[1];
+      checksEl.appendChild(li);
+    });
+  }
+
+  /* Pipeline and headline */
+  var pipelineEl = document.getElementById('pipeline');
+  var headEl = document.getElementById('headline');
+  var headTextEl = document.getElementById('headline-text');
+  function renderStage() {
+    pipelineEl.innerHTML = '';
+    STAGES.forEach(function (s, i) {
+      var li = document.createElement('li');
+      var cls = 'stage';
+      var sub = '';
+      if (state.skip.indexOf(i) !== -1 && state.stage > i) { cls += ' skipped'; sub = 'not needed'; }
+      else if (i === state.stage) { cls += ' current'; sub = 'now'; }
+      else if (i < state.stage) { cls += ' done'; sub = 'done'; }
+      li.className = cls;
+      li.innerHTML = '<span></span><small></small>';
+      li.firstChild.textContent = s;
+      li.lastChild.textContent = sub;
+      pipelineEl.appendChild(li);
+    });
+    headEl.className = 'headline ' + (state.tone === 'ok' ? '' : state.tone);
+    headTextEl.textContent = state.headline;
+  }
+
+  /* Log */
+  var logEl = document.getElementById('log');
+  var t0 = Date.now();
+  function stamp() {
+    var s = Math.floor((Date.now() - t0) / 1000);
+    return '00:' + (s < 10 ? '0' : '') + s;
+  }
+  function log(msg, tone) {
+    var li = document.createElement('li');
+    li.className = tone || '';
+    var t = document.createElement('time'); t.textContent = stamp();
+    var sp = document.createElement('span'); sp.textContent = msg;
+    li.appendChild(t); li.appendChild(sp);
+    logEl.insertBefore(li, logEl.firstChild);
+    while (logEl.children.length > 30) logEl.removeChild(logEl.lastChild);
+  }
+
+  function renderAll() { renderMetrics(); renderRegions(); renderChecks(); renderStage(); }
+
+  /* Smooth animation of numbers */
+  setInterval(function () {
+    METRICS.forEach(function (m) {
+      var noise = m.k === 'resp' ? Math.max(4, target.resp * 0.03) : m.k === 'err' ? 0.08 : 1.4;
+      var v = cur[m.k] + (target[m.k] - cur[m.k]) * 0.22 + (Math.random() - 0.5) * noise;
+      cur[m.k] = Math.max(0, Math.min(m.k === 'resp' ? 20000 : m.k === 'err' ? 100 : 100, v));
+    });
+    cur.users += (target.users - cur.users) * 0.2;
+    share.a += (shareTarget.a - share.a) * 0.2;
+    share.b += (shareTarget.b - share.b) * 0.2;
+    renderMetrics();
+    renderRegions();
+  }, 400);
+
+  /* Scenario control */
+  var timers = [];
+  function at(ms, fn) { timers.push(setTimeout(function () { fn(); renderAll(); }, ms)); }
+  function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+  function setTargets(o) { for (var key in o) target[key] = o[key]; }
+  function allChecks(up) { CHECKS.forEach(function (c) { state.checks[c[0]] = up; }); }
+  function resetBase(instant) {
+    setTargets(BASE);
+    if (instant) { for (var key in BASE) cur[key] = BASE[key]; share.a = 100; share.b = 0; }
+    shareTarget.a = 100; shareTarget.b = 0;
+    state.a = { status: 'healthy', running: 3, total: 3 };
+    state.b = { status: 'healthy', running: 3, total: 3 };
+    state.db = 'Replication is in sync. Region A holds the primary database.';
+    state.stage = -1; state.skip = [];
+    allChecks(true);
+    state.tone = 'ok'; state.headline = 'Normal operation. CloudGuard is monitoring.';
+    logEl.innerHTML = '';
+    t0 = Date.now();
+  }
+
+  var scenarios = {
+    normal: function () {
+      resetBase(false);
+      log('Normal operation. All health checks pass.', 'ok');
+    },
+    spike: function () {
+      resetBase(true);
+      log('Traffic spike begins. Customers are flooding the sale.', 'warn');
+      setTargets({ users: 9800, cpu: 95, mem: 88, net: 97, db: 94, err: 12, resp: 4000 });
+      state.stage = 0; state.skip = [2];
+      state.tone = 'warn'; state.headline = 'Traffic is spiking. Region A is under strain.';
+      at(1300, function () {
+        state.a.status = 'degraded';
+        state.checks.checkout = false; state.checks.payment = false;
+        state.tone = 'bad'; state.headline = 'Checkout and Payment are failing, but the website still opens.';
+        log('Detected: CPU 95%, error rate 12%, response time 4 s.', 'bad');
+        log('Application health check: Checkout and Payment are down.', 'bad');
+      });
+      at(2800, function () {
+        state.stage = 1;
+        log('Decision: scale out Region A. Failover is not needed because Region A still responds.', 'warn');
+      });
+      at(4200, function () {
+        state.stage = 3;
+        state.a.running = 6; state.a.total = 6;
+        setTargets({ cpu: 62, mem: 66, net: 70, db: 58, err: 1.4, resp: 420 });
+        state.headline = 'Auto-scaling is adding servers.';
+        log('Auto-scaling: 3 servers to 6 servers.', 'ok');
+      });
+      at(6000, function () {
+        state.a.status = 'healthy';
+        allChecks(true);
+        state.tone = 'ok'; state.headline = 'Recovered. Checkout and Payment work again.';
+        log('Checkout and Payment recovered. Error rate back under control.', 'ok');
+      });
+      at(7400, function () {
+        state.stage = 4;
+        log('Incident recorded. Administrator alerted: spike handled by auto-scaling.', 'ok');
+      });
+    },
+    failure: function () {
+      resetBase(true);
+      setTargets({ cpu: 12, mem: 30, net: 8, db: 20, err: 48, resp: 8200 });
+      state.a.status = 'down'; state.a.running = 0;
+      allChecks(false);
+      state.stage = 0;
+      state.tone = 'bad'; state.headline = 'Region A is down. Customers cannot shop.';
+      log('Region A: DOWN. Every health check is failing.', 'bad');
+      at(1700, function () {
+        state.stage = 1;
+        log('Region B is healthy. Failover controller selects Region B.', 'warn');
+      });
+      at(3200, function () {
+        state.stage = 2;
+        shareTarget.a = 0; shareTarget.b = 100;
+        state.b.running = 6; state.b.total = 6;
+        state.headline = 'Failing over: redirecting traffic to Region B.';
+        log('Redirecting new requests to Region B. Scaling Region B from 3 to 6 servers.', 'warn');
+      });
+      at(4700, function () {
+        state.db = 'Backup database promoted to primary in Region B.';
+        log('Backup database promoted. Replication was in sync.', 'ok');
+      });
+      at(5800, function () {
+        state.stage = 3;
+        allChecks(true);
+        setTargets({ cpu: 55, mem: 58, net: 42, db: 52, err: 0.8, resp: 220 });
+        state.tone = 'ok'; state.headline = 'Failover complete. Serving customers from Region B.';
+        log('Automatic failover completed. Checkout and Payment are working.', 'ok');
+      });
+      at(7200, function () {
+        state.stage = 4;
+        log('Incident saved for later analysis. Administrator alerted.', 'ok');
+      });
+    }
+  };
+
+  var buttons = document.querySelectorAll('.scenario');
+  function run(name) {
+    clearTimers();
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-scenario') === name ? 'true' : 'false'); });
+    scenarios[name]();
+    renderAll();
+  }
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () { run(b.getAttribute('data-scenario')); });
+  });
+  run('normal');
+})();
+</script>
+</body>
+</html>
